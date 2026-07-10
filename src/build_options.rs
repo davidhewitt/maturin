@@ -511,6 +511,21 @@ mod tests {
             find_bridge(&pyo3_bin, None).unwrap(),
             BridgeModel::Bin(Some(_))
         ));
+
+        // `bin-workspace-pyo3-feature` has a pyo3 transitive dependency
+        // gated by a feature, should not select pyo3 bindings
+        let workspace_bin = MetadataCommand::new()
+            .manifest_path(
+                test_crate_path("bin-workspace-pyo3-feature")
+                    .join("bin")
+                    .join("Cargo.toml"),
+            )
+            .exec()
+            .unwrap();
+        assert_eq!(
+            find_bridge(&workspace_bin, Some("bin")).unwrap(),
+            BridgeModel::Bin(None)
+        );
     }
 
     #[test]
