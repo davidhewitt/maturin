@@ -8,12 +8,39 @@ use anyhow::{Result, bail, ensure};
 
 use super::discovery::InterpreterMetadataMessage;
 
+pub(super) fn normalize_abiflags(
+    abiflags: &mut String,
+    debug: bool,
+    gil_disabled: bool,
+) -> Result<()> {
+    if debug && !abiflags.contains('d') {
+        abiflags.insert(0, 'd');
+    }
+    if gil_disabled && !abiflags.contains('t') {
+        abiflags.push('t');
+    }
+    validate_abiflags(abiflags, debug, gil_disabled)
+}
+
+pub(super) fn validate_abiflags(abiflags: &str, debug: bool, gil_disabled: bool) -> Result<()> {
+    for (flag, enabled, name) in [
+        ('d', debug, "Py_DEBUG"),
+        ('t', gil_disabled, "Py_GIL_DISABLED"),
+    ] {
+        ensure!(
+            abiflags.contains(flag) == enabled,
+            "ABI flags are inconsistent with {name}={enabled}"
+        );
+    }
+    Ok(())
+}
+
 /// Returns the abiflags that are assembled through the message, with some
 /// additional sanity checks.
 ///
 /// The rules are as follows:
 ///  - python 3 + Unix: Use ABIFLAGS
-///  - python 3 + Windows: No ABIFLAGS, return an empty string
+///  - python 3 + Windows: Use ABIFLAGS when available, otherwise infer them
 pub(super) fn fun_with_abiflags(
     message: &InterpreterMetadataMessage,
     target: &Target,
@@ -136,6 +163,39 @@ pub(super) fn calculate_abi_tag(ext_suffix: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_infer_abiflags() {
+        for (flags, debug, gil_disabled, expected) in [
+            ("", false, false, ""),
+            ("", true, false, "d"),
+            ("", false, true, "t"),
+            ("", true, true, "dt"),
+            ("t", true, true, "dt"),
+            ("d", true, true, "dt"),
+            ("dt", true, true, "dt"),
+            ("m", true, false, "dm"),
+            ("dt", false, false, "dt"),
+        ] {
+            let mut flags = flags.to_string();
+            normalize_abiflags(&mut flags, debug, gil_disabled).unwrap();
+            assert_eq!(flags, expected);
+        }
+    }
+
+    #[test]
+    fn test_validate_abiflags() {
+        for (flags, debug, gil_disabled) in [
+            ("", false, false),
+            ("d", true, false),
+            ("t", false, true),
+            ("dt", true, true),
+        ] {
+            assert!(validate_abiflags(flags, debug, gil_disabled).is_ok());
+            assert!(validate_abiflags(flags, !debug, gil_disabled).is_err());
+            assert!(validate_abiflags(flags, debug, !gil_disabled).is_err());
+        }
+    }
 
     #[test]
     fn test_calculate_abi_tag() {

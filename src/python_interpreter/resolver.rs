@@ -18,6 +18,7 @@ use super::{InterpreterConfig, InterpreterKind, PythonInterpreter};
 use crate::cross_compile::{
     find_build_details, find_sysconfigdata, parse_build_details_json_file, parse_sysconfigdata,
 };
+use crate::python_interpreter::abiflags::normalize_abiflags;
 use crate::{BridgeModel, StableAbiKind, Target};
 use anyhow::{Context, Result, bail, format_err};
 use pep440_rs::VersionSpecifiers;
@@ -835,13 +836,9 @@ impl<'a> InterpreterResolver<'a> {
             .context("version_minor is not defined")?
             .parse::<usize>()
             .context("Could not parse value of version_minor")?;
-        let abiflags = data
+        let mut abiflags = data
             .get("ABIFLAGS")
             .map(ToString::to_string)
-            .unwrap_or_default();
-        let gil_disabled = data
-            .get("Py_GIL_DISABLED")
-            .map(|x| x == "1")
             .unwrap_or_default();
         let ext_suffix = data
             .get("EXT_SUFFIX")
@@ -860,6 +857,11 @@ impl<'a> InterpreterResolver<'a> {
                 }
             })
             .context("unsupported Python interpreter")?;
+        let debug = data
+            .get("Py_DEBUG")
+            .is_some_and(|x| interpreter_kind == InterpreterKind::CPython && x == "1");
+        let gil_disabled = data.get("Py_GIL_DISABLED").is_some_and(|x| x == "1");
+        normalize_abiflags(&mut abiflags, debug, gil_disabled)?;
         Ok(PythonInterpreter {
             config: InterpreterConfig {
                 major,
@@ -945,6 +947,54 @@ impl<'a> InterpreterResolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sysconfigdata_normalizes_abiflags() {
+        let target = Target::from_resolved_target_triple("x86_64-unknown-linux-gnu").unwrap();
+        let bridge = BridgeModel::Bin(None);
+        let resolver = InterpreterResolver::new(&target, &bridge, None, &[], false, false);
+        for (flags, debug, gil_disabled, expected) in [
+            (None, None, None, ""),
+            (None, None, Some("1"), "t"),
+            (Some(""), None, Some("1"), "t"),
+            (Some("d"), None, Some("1"), "dt"),
+            (Some("dt"), None, Some("1"), "dt"),
+            (Some("t"), None, None, "t"),
+            (None, Some("1"), None, "d"),
+            (None, Some("1"), Some("1"), "dt"),
+            (Some("t"), Some("1"), Some("1"), "dt"),
+        ] {
+            let mut data = std::collections::HashMap::from([
+                ("version_major".to_string(), "3".to_string()),
+                ("version_minor".to_string(), "14".to_string()),
+                (
+                    "SOABI".to_string(),
+                    format!("cpython-314{expected}-x86_64-linux-gnu"),
+                ),
+                (
+                    "EXT_SUFFIX".to_string(),
+                    format!(".cpython-314{expected}-x86_64-linux-gnu.so"),
+                ),
+            ]);
+            if let Some(flags) = flags {
+                data.insert("ABIFLAGS".to_string(), flags.to_string());
+            }
+            if let Some(debug) = debug {
+                data.insert("Py_DEBUG".to_string(), debug.to_string());
+            }
+            if let Some(gil_disabled) = gil_disabled {
+                data.insert("Py_GIL_DISABLED".to_string(), gil_disabled.to_string());
+            }
+            let interpreter = resolver.interpreter_from_sysconfigdata(&data).unwrap();
+            assert_eq!(interpreter.abiflags, expected);
+            assert_eq!(interpreter.gil_disabled, expected.contains('t'));
+            if expected.contains('t') {
+                data.insert("ABIFLAGS".to_string(), expected.to_string());
+                data.insert("Py_GIL_DISABLED".to_string(), "0".to_string());
+                assert!(resolver.interpreter_from_sysconfigdata(&data).is_err());
+            }
+        }
+    }
 
     #[test]
     fn test_interpreter_spec_cpython_versions() {
