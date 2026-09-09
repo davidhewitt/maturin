@@ -175,7 +175,7 @@ mod tests {
             ("d", true, true, "dt"),
             ("dt", true, true, "dt"),
             ("m", true, false, "dm"),
-            ("dt", false, false, "dt"),
+            ("dt", true, true, "dt"),
         ] {
             let mut flags = flags.to_string();
             normalize_abiflags(&mut flags, debug, gil_disabled).unwrap();

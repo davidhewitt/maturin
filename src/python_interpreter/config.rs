@@ -375,22 +375,24 @@ impl InterpreterConfig {
         })?;
         let implementation = implementation.unwrap_or_else(|| "cpython".to_string());
         let interpreter_kind = implementation.parse().map_err(|e| format_err!("{}", e))?;
-        let gil_disabled = build_flags
-            .as_deref()
-            .unwrap_or_default()
-            .split(',')
-            .any(|flag| flag.trim() == "Py_GIL_DISABLED");
-        let debug = build_flags
-            .as_deref()
-            .unwrap_or_default()
-            .split(',')
-            .any(|flag| flag.trim() == "Py_DEBUG");
+        let known_flags = build_flags.map(|flags| {
+            let debug = flags.split(',').any(|flag| flag.trim() == "Py_DEBUG");
+            let gil_disabled = flags
+                .split(',')
+                .any(|flag| flag.trim() == "Py_GIL_DISABLED");
+            (debug, gil_disabled)
+        });
         let abiflags = if let Some(abiflags) = abiflags {
-            validate_abiflags(&abiflags, debug, gil_disabled)?;
+            if let Some((debug, gil_disabled)) = known_flags {
+                // `gil_disabled` and `debug` are derived from
+                validate_abiflags(&abiflags, debug, gil_disabled)?;
+            }
             abiflags
         } else {
             let mut abiflags = String::new();
-            normalize_abiflags(&mut abiflags, debug, gil_disabled)?;
+            if let Some((debug, gil_disabled)) = known_flags {
+                normalize_abiflags(&mut abiflags, debug, gil_disabled)?;
+            }
             if interpreter_kind == InterpreterKind::CPython && (major, minor) < (3, 8) {
                 // default of "m" (pymalloc) for Python 3.7 and earlier
                 abiflags.push('m');
@@ -412,6 +414,7 @@ impl InterpreterConfig {
                 "ABI flags are unsupported for {interpreter_kind}"
             );
         }
+        let gil_disabled = abiflags.contains('t');
         let abi_tag = match interpreter_kind {
             InterpreterKind::CPython => {
                 abi_tag.unwrap_or_else(|| format!("{major}{minor}{abiflags}"))
@@ -588,6 +591,7 @@ mod tests {
         ] {
             let file = tempfile::NamedTempFile::new().unwrap();
             fs::write(file.path(), format!("version=3.14\n{settings}")).unwrap();
+            dbg!(settings, flags);
             let config = InterpreterConfig::from_pyo3_config(file.path(), &target).unwrap();
             assert_eq!(config.abiflags, flags, "{settings}");
             assert_eq!(config.gil_disabled, flags.contains('t'));

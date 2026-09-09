@@ -857,10 +857,15 @@ impl<'a> InterpreterResolver<'a> {
                 }
             })
             .context("unsupported Python interpreter")?;
+        // if sysconfig missing the Py_DEBUG or Py_GIL_DISABLED env vars, fall back to inferring from abiflags
         let debug = data
             .get("Py_DEBUG")
-            .is_some_and(|x| interpreter_kind == InterpreterKind::CPython && x == "1");
-        let gil_disabled = data.get("Py_GIL_DISABLED").is_some_and(|x| x == "1");
+            .map(|x| x == "1")
+            .unwrap_or(abiflags.contains("d"));
+        let gil_disabled = data
+            .get("Py_GIL_DISABLED")
+            .map(|x| x == "1")
+            .unwrap_or(abiflags.contains("t"));
         normalize_abiflags(&mut abiflags, debug, gil_disabled)?;
         Ok(PythonInterpreter {
             config: InterpreterConfig {
