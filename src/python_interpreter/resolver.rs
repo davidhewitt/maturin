@@ -18,7 +18,7 @@ use super::{InterpreterConfig, InterpreterKind, PythonInterpreter};
 use crate::cross_compile::{
     find_build_details, find_sysconfigdata, parse_build_details_json_file, parse_sysconfigdata,
 };
-use crate::python_interpreter::abiflags::normalize_abiflags;
+use crate::python_interpreter::abiflags::{default_abiflags, validate_abiflags};
 use crate::{BridgeModel, StableAbiKind, Target};
 use anyhow::{Context, Result, bail, format_err};
 use pep440_rs::VersionSpecifiers;
@@ -836,10 +836,6 @@ impl<'a> InterpreterResolver<'a> {
             .context("version_minor is not defined")?
             .parse::<usize>()
             .context("Could not parse value of version_minor")?;
-        let mut abiflags = data
-            .get("ABIFLAGS")
-            .map(ToString::to_string)
-            .unwrap_or_default();
         let ext_suffix = data
             .get("EXT_SUFFIX")
             .context("sysconfig didn't define an `EXT_SUFFIX` ಠ_ಠ")?;
@@ -857,16 +853,27 @@ impl<'a> InterpreterResolver<'a> {
                 }
             })
             .context("unsupported Python interpreter")?;
-        // if sysconfig missing the Py_DEBUG or Py_GIL_DISABLED env vars, fall back to inferring from abiflags
-        let debug = data
-            .get("Py_DEBUG")
-            .map(|x| x == "1")
-            .unwrap_or(abiflags.contains("d"));
-        let gil_disabled = data
-            .get("Py_GIL_DISABLED")
-            .map(|x| x == "1")
-            .unwrap_or(abiflags.contains("t"));
-        normalize_abiflags(&mut abiflags, debug, gil_disabled)?;
+        // if sysconfig missing the Py_DEBUG or Py_GIL_DISABLED env vars, fall back to inferring from abiflags (if present)
+        let abiflags = data.get("ABIFLAGS");
+        let debug = data.get("Py_DEBUG").map(|x| x == "1").unwrap_or(
+            abiflags
+                .map(String::as_str)
+                .unwrap_or_default()
+                .contains("d"),
+        );
+        let gil_disabled = data.get("Py_GIL_DISABLED").map(|x| x == "1").unwrap_or(
+            abiflags
+                .map(String::as_str)
+                .unwrap_or_default()
+                .contains("t"),
+        );
+        // and finally, if abiflags are missing, infer from Py_DEBUG and Py_GIL_DISABLED
+        let abiflags = if let Some(abiflags) = abiflags {
+            validate_abiflags(&abiflags, gil_disabled, debug)?;
+            abiflags.to_string()
+        } else {
+            default_abiflags(minor, gil_disabled, debug)
+        };
         Ok(PythonInterpreter {
             config: InterpreterConfig {
                 major,
@@ -958,16 +965,16 @@ mod tests {
         let target = Target::from_resolved_target_triple("x86_64-unknown-linux-gnu").unwrap();
         let bridge = BridgeModel::Bin(None);
         let resolver = InterpreterResolver::new(&target, &bridge, None, &[], false, false);
-        for (flags, debug, gil_disabled, expected) in [
+        for (flags, gil_disabled, debug, expected) in [
             (None, None, None, ""),
-            (None, None, Some("1"), "t"),
-            (Some(""), None, Some("1"), "t"),
-            (Some("d"), None, Some("1"), "dt"),
-            (Some("dt"), None, Some("1"), "dt"),
-            (Some("t"), None, None, "t"),
-            (None, Some("1"), None, "d"),
-            (None, Some("1"), Some("1"), "dt"),
-            (Some("t"), Some("1"), Some("1"), "dt"),
+            (None, Some("1"), None, "t"),
+            (Some(""), None, None, ""),
+            (Some("d"), None, Some("1"), "d"),
+            (Some("td"), Some("1"), Some("1"), "td"),
+            (Some("t"), Some("1"), None, "t"),
+            (None, Some("1"), None, "t"),
+            (None, Some("1"), Some("1"), "td"),
+            (Some("td"), Some("1"), Some("1"), "td"),
         ] {
             let mut data = std::collections::HashMap::from([
                 ("version_major".to_string(), "3".to_string()),

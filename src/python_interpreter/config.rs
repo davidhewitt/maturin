@@ -1,10 +1,12 @@
 use super::{
     FREE_THREADED_MINIMUM_PYTHON_MINOR, InterpreterKind, MAXIMUM_PYPY_MINOR, MAXIMUM_PYTHON_MINOR,
-    MINIMUM_PYPY_MINOR, MINIMUM_PYTHON_MINOR,
-    abiflags::{normalize_abiflags, validate_abiflags},
+    MINIMUM_PYPY_MINOR, MINIMUM_PYTHON_MINOR, abiflags::validate_abiflags,
 };
-use crate::target::{Arch, Os};
 use crate::{StableAbi, StableAbiKind, Target};
+use crate::{
+    python_interpreter::abiflags::default_abiflags,
+    target::{Arch, Os},
+};
 use anyhow::{Context, Result, ensure, format_err};
 use fs_err as fs;
 use serde::Deserialize;
@@ -376,28 +378,21 @@ impl InterpreterConfig {
         let implementation = implementation.unwrap_or_else(|| "cpython".to_string());
         let interpreter_kind = implementation.parse().map_err(|e| format_err!("{}", e))?;
         let known_flags = build_flags.map(|flags| {
-            let debug = flags.split(',').any(|flag| flag.trim() == "Py_DEBUG");
             let gil_disabled = flags
                 .split(',')
                 .any(|flag| flag.trim() == "Py_GIL_DISABLED");
-            (debug, gil_disabled)
+            let debug = flags.split(',').any(|flag| flag.trim() == "Py_DEBUG");
+            (gil_disabled, debug)
         });
         let abiflags = if let Some(abiflags) = abiflags {
-            if let Some((debug, gil_disabled)) = known_flags {
+            if let Some((gil_disabled, debug)) = known_flags {
                 // `gil_disabled` and `debug` are derived from
-                validate_abiflags(&abiflags, debug, gil_disabled)?;
+                validate_abiflags(&abiflags, gil_disabled, debug)?;
             }
             abiflags
         } else {
-            let mut abiflags = String::new();
-            if let Some((debug, gil_disabled)) = known_flags {
-                normalize_abiflags(&mut abiflags, debug, gil_disabled)?;
-            }
-            if interpreter_kind == InterpreterKind::CPython && (major, minor) < (3, 8) {
-                // default of "m" (pymalloc) for Python 3.7 and earlier
-                abiflags.push('m');
-            }
-            abiflags
+            let (gil_disabled, debug) = known_flags.unwrap_or((false, false));
+            default_abiflags(minor, gil_disabled, debug)
         };
         if interpreter_kind == InterpreterKind::CPython {
             ensure!(
@@ -582,11 +577,11 @@ mod tests {
             ("", ""),
             ("abiflags=\n", ""),
             ("abiflags=d\n", "d"),
-            ("abiflags=dt\n", "dt"),
+            ("abiflags=td\n", "td"),
             ("build_flags=Py_GIL_DISABLED\n", "t"),
             ("abiflags=t\n", "t"),
-            ("abiflags=dt\nbuild_flags=Py_DEBUG,Py_GIL_DISABLED\n", "dt"),
-            ("build_flags=Py_DEBUG,Py_GIL_DISABLED\n", "dt"),
+            ("abiflags=td\nbuild_flags=Py_DEBUG,Py_GIL_DISABLED\n", "td"),
+            ("build_flags=Py_DEBUG,Py_GIL_DISABLED\n", "td"),
             ("build_flags=Py_DEBUG\n", "d"),
         ] {
             let file = tempfile::NamedTempFile::new().unwrap();
@@ -644,7 +639,7 @@ mod tests {
             "wasm32-unknown-emscripten",
         ] {
             let target = Target::from_resolved_target_triple(triple).unwrap();
-            for flags in ["", "d", "t", "dt"] {
+            for flags in ["", "d", "t", "td"] {
                 let config = InterpreterConfig::lookup_one(
                     &target,
                     InterpreterKind::CPython,

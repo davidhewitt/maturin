@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn environment_signature_includes_abiflags() {
-        for flags in ["", "d", "t", "dt"] {
+        for flags in ["", "d", "t", "td"] {
             let interp = interpreter(InterpreterKind::CPython, 14, flags, flags.contains('t'));
             assert_eq!(
                 interp.environment_signature(),

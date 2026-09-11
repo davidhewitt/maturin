@@ -9,7 +9,6 @@ use super::{
     FREE_THREADED_MINIMUM_PYTHON_MINOR, InterpreterConfig, InterpreterKind, MINIMUM_PYPY_MINOR,
     MINIMUM_PYTHON_MINOR, PythonInterpreter,
 };
-use crate::python_interpreter::abiflags::normalize_abiflags;
 use crate::target::Arch;
 use crate::{BridgeModel, Target};
 use anyhow::{Context, Result, bail, format_err};
@@ -43,8 +42,8 @@ pub(super) struct InterpreterMetadataMessage {
     // comes from `platform.system()`
     pub system: String,
     pub soabi: Option<String>,
-    pub debug: bool,
     pub gil_disabled: bool,
+    pub debug: bool,
 }
 
 /// Manages interpreter discovery on Windows.
@@ -616,15 +615,10 @@ fn from_metadata_message(
         }
     };
 
-    let abiflags = fun_with_abiflags(&message, target, bridge)
-        .and_then(|mut flags| {
-            normalize_abiflags(&mut flags, message.debug, message.gil_disabled)?;
-            Ok(flags)
-        })
-        .context(format_err!(
-            "Failed to get information from the python interpreter at {}",
-            executable.as_ref().display()
-        ))?;
+    let abiflags = fun_with_abiflags(&message, target, bridge).context(format_err!(
+        "Failed to get information from the python interpreter at {}",
+        executable.as_ref().display()
+    ))?;
 
     let executable = message
         .executable
@@ -1055,9 +1049,14 @@ mod tests {
     }
 
     #[test]
-    fn test_discovery_infers_windows_debug_abiflags() {
+    fn test_discovery_infers_windows_abiflags() {
         let target = Target::from_resolved_target_triple("x86_64-pc-windows-msvc").unwrap();
-        for (gil_disabled, expected) in [(false, "d"), (true, "dt")] {
+        for (gil_disabled, debug, expected) in [
+            (false, false, ""),
+            (true, false, "t"),
+            (false, true, "d"),
+            (true, true, "td"),
+        ] {
             let message = InterpreterMetadataMessage {
                 major: 3,
                 minor: 13,
@@ -1068,8 +1067,8 @@ mod tests {
                 platform: "win-amd64".to_string(),
                 executable: None,
                 soabi: None,
-                debug: true,
                 gil_disabled,
+                debug,
                 system: "windows".to_string(),
             };
             let interpreter =
@@ -1081,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn test_discovery_normalizes_abiflags() {
+    fn test_discovery_abiflags() {
         for (triple, system, platform, minor, flags, expected) in [
             (
                 "x86_64-pc-windows-msvc",
@@ -1097,15 +1096,15 @@ mod tests {
                 "linux-x86_64",
                 14,
                 Some("d"),
-                "dt",
+                "d",
             ),
             (
                 "x86_64-unknown-linux-gnu",
                 "linux",
                 "linux-x86_64",
                 14,
-                Some("dt"),
-                "dt",
+                Some("td"),
+                "td",
             ),
         ] {
             let target = Target::from_resolved_target_triple(triple).unwrap();
@@ -1120,7 +1119,7 @@ mod tests {
                 executable: None,
                 soabi: None,
                 debug: expected.contains('d'),
-                gil_disabled: true,
+                gil_disabled: expected.contains('t'),
                 system: system.to_string(),
             };
             let interpreter =
@@ -1128,7 +1127,6 @@ mod tests {
                     .unwrap()
                     .unwrap();
             assert_eq!(interpreter.abiflags, expected);
-            assert!(interpreter.gil_disabled);
         }
     }
 
