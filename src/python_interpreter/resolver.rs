@@ -869,7 +869,7 @@ impl<'a> InterpreterResolver<'a> {
         );
         // and finally, if abiflags are missing, infer from Py_DEBUG and Py_GIL_DISABLED
         let abiflags = if let Some(abiflags) = abiflags {
-            validate_abiflags(&abiflags, gil_disabled, debug)?;
+            validate_abiflags(abiflags, gil_disabled, debug)?;
             abiflags.to_string()
         } else {
             default_abiflags(minor, gil_disabled, debug)

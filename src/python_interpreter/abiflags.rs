@@ -104,7 +104,7 @@ pub(super) fn fun_with_abiflags(
             }
         }
     } else if let Some(abiflags) = &message.abiflags {
-        validate_abiflags(&abiflags, message.gil_disabled, message.debug)?;
+        validate_abiflags(abiflags, message.gil_disabled, message.debug)?;
         Ok(abiflags.to_string())
     } else {
         bail!("A python 3 interpreter on Linux or macOS must define abiflags in its sysconfig ಠ_ಠ")
